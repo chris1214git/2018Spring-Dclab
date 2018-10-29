@@ -1,0 +1,160 @@
+module Top(
+	input i_clk,
+	input i_rst,
+	input i_start,
+	output [3:0] o_random_out
+);
+
+logic [1:0]  state;
+logic [1:0]  state_w ;//= 0;
+logic [1:0]  state_r ;
+//logic [63:0] time_start = 0;
+logic [3:0]  random_num ;//= 0;
+//logic [63:0] random_state = 1;
+
+logic [31:0] clock_counter;// = 0;
+logic [14:0] clock_counter2;// = 0;
+logic [14:0] clock_counter2_w;// = 0;
+
+logic [3:0] o_random_out_r;
+logic [3:0] o_random_out_w;
+assign o_random_out=o_random_out_r;
+
+logic [31:0] seed;
+logic [31:0] num_r;
+logic [31:0] num_w;
+random random1(.seed(seed), .random_num(random_num), .num(num_w));
+assign state=state_r;
+/*------------------------------*/
+always_comb begin
+
+	case(state)
+		2'b00: begin //idle
+			if(i_start == 1) 
+			begin 
+				clock_counter2_w = 0;
+				state_w = 1;
+				seed = clock_counter;
+			end
+			else begin
+				seed = 0;
+				state_w = 0;
+				clock_counter2_w = clock_counter2+1;
+			end
+			o_random_out_w = o_random_out;
+		end
+		2'b01: begin //fast
+			if(i_start == 1) 
+			begin
+				state_w = 1;
+				clock_counter2_w = 0;
+				seed = clock_counter;
+			end
+			else begin
+				seed = num_r + clock_counter2;
+				clock_counter2_w = clock_counter2+1;
+				if(clock_counter2[14:0]==15'b1111_1111_1111_111)
+					state_w = 2;
+				else state_w = 1;
+			end
+		
+			if (clock_counter2[11:0]==12'd0) 
+				o_random_out_w=random_num;
+			else
+				o_random_out_w=o_random_out_r;
+				
+		end
+		2'b10: begin //medium
+		
+			if(i_start == 1) 
+			begin
+				seed = clock_counter;
+				state_w = 1;
+				clock_counter2_w = 0;
+			end
+			else begin
+				seed = num_r + clock_counter2;
+				clock_counter2_w = clock_counter2+1;
+				if(clock_counter2[14:0]==15'b1111_1111_1111_111)
+					state_w = 3;
+				else state_w = 2;
+			end
+			if (clock_counter2[12:0]==13'd0) 
+				o_random_out_w=random_num;
+			else
+				o_random_out_w=o_random_out_r;
+				
+		end
+		2'b11: begin //slow
+			if(i_start == 1) 
+			begin
+				seed = clock_counter;
+				state_w = 1;
+				clock_counter2_w = 0;
+			end
+			else begin
+				seed = num_r + clock_counter2;
+				clock_counter2_w = clock_counter2+1;
+				if(clock_counter2[14:0]==15'b1111_1111_1111_111)
+					state_w = 0;
+				else state_w = 3;
+			end
+			if (clock_counter2[13:0]==14'd0) 
+				o_random_out_w=random_num;
+			else
+				o_random_out_w=o_random_out_r;
+			
+		end
+		default: begin
+			
+		end
+		
+		
+		
+	endcase
+	
+	
+end
+
+/*------------------------------*/
+always_ff @(posedge i_clk or negedge i_rst) begin if(!i_rst) begin
+	clock_counter<=0;
+	clock_counter2<=0;
+	o_random_out_r<=0;
+	state_r<=0;
+	num_r<=0;
+	end
+	
+	else begin
+    clock_counter <= clock_counter + 1;
+	if(state==0) clock_counter2<=0;
+	else clock_counter2<=clock_counter2_w;
+	state_r<=state_w;
+	o_random_out_r <= o_random_out_w;
+	num_r<=num_w;
+	end
+end
+
+endmodule
+
+
+
+
+
+
+
+
+
+/*------------------------------*/
+module random(
+	input [31:0] seed,
+	output [3:0] random_num,
+	output[31:0] num
+);
+
+//logic [63:0] num;
+
+assign num = seed * 1103515245 + 12345;
+assign random_num = {num[15:14], num[3], num[13]};
+
+endmodule
