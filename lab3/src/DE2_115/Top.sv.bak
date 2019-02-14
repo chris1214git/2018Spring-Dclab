@@ -1,0 +1,300 @@
+module Top(
+	input i_clk12M,
+	input i_clk100k,
+	input i_key0, //play
+	input i_key1, //stop
+	input i_key2, //faster
+	input i_key3, //slower
+	input i_sw_rec,// play=0 rec=1
+	input i_sw_intp,// zero=0 interpolation=1
+	input i_sw_rst,// reset=0 
+	output [19:0] SRAM_ADDR,
+	inout [15:0] SRAM_DQ,
+	output SRAM_CE_N,
+	output SRAM_LB_N,
+	output SRAM_OE_N,
+	output SRAM_UB_N,
+	output SRAM_WE_N,
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	output o_sclk,
+	inout o_sdat,
+	input i_daclrc,
+	input i_adclrc,
+	input i_bclk,
+	input i_rst,
+	input i_adc_data,
+	output [15:0] o_dac_data,
+    inout [7:0] LCD_DATA,
+	output LCD_EN,
+	output LCD_ON,
+	output LCD_RS,
+	output LCD_RW,
+	output [2:0] debug_state,
+	output [3:0] debug_speed,
+	output o_write_enable,		//for test
+	output o_read_enable,
+	output [2:0] o_state_test,
+	output [19:0] debug_sram_writeaddr
+);
+assign debug_speed = speed_r;
+assign debug_state = state_r;
+
+parameter IDLE   = 3'b000;
+parameter PLAY   = 3'b001;
+parameter PLAY_s = 3'b010;
+parameter RECORD = 3'b011;
+parameter RECORD_s = 3'b100;
+//enum {IDLE, PLAY, PLAY_s, RECORD, RECORD_s} state_w, state_r;
+logic [2:0] state_r, state_w;
+logic[3:0] speed_r, speed_w; 
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+logic I2C_init_finish;
+//logic [1:0] state_WRE;
+logic [15:0] o_sram_data;  //output data from sram
+logic [15:0] i_sram_data;  //input data to sram
+logic i_sram_write_enable; 
+logic i_sram_read_require; 
+
+
+//assign state_WRE = 2;
+//debug
+assign o_write_enable = i_sram_write_enable;
+assign o_read_enable = sram_readdata_valid;
+
+
+logic sram_readdata_valid;
+logic sram_read_finished;
+
+
+logic [19:0] record_end_addr_r,record_end_addr_w;
+
+I2CInitial I2C1 (
+	.i_clk(i_clk100k),
+	.i_rst(i_sw_rst) ,		//?????????????????????????????????????????????????????????????????????????????????????????????????for test only
+	.o_sclk(o_sclk),
+	.o_sdat(o_sdat),
+	.Init_finish(I2C_init_finish)
+);
+
+/*SetCodec set1(
+	.i_clk(i_clk100k),
+	.i_rst(i_sw_rst) ,		//?????????????????????????????????????????????????????????????????????????????????????????????????for test only
+	.o_sclk(o_sclk),
+	.o_sdat(o_sdat),
+	.o_init_finish(I2C_init_finish)
+);*/
+
+I2S I2S1(
+	.i_DACLRC(i_daclrc),
+	.i_ADCLRC(i_adclrc),
+	.i_BCLK(i_bclk),
+	.i_rst(i_sw_rst),
+	.i_state_WRE(state_r),    //////////////////////////??????????????????????????????????????????????????????????
+	.i_start(I2C_init_finish),
+	.i_adc_data(i_adc_data),
+	.i_dac_data(o_sram_data),
+	.i_sram_read(sram_readdata_valid),
+	.o_data_write(i_sram_data),
+	.o_sram_write(i_sram_write_enable),
+	.o_sram_read(i_sram_read_require),
+	.o_dac_data(o_dac_data),
+	.state_test(o_state_test)
+);
+
+/*I2S_test test1(
+	.i_daclrck(i_daclrc),
+	.i_adclrck(i_adclrc),
+	.i_bclk(i_bclk),
+	.i_rst(i_sw_rst),
+	.o_mem_action(state_WRE),   //tell I2S it's time to write(0) read(1) or echo(2)
+	.init_finish(I2C_init_finish),				//tell I2S it can start transmitting data
+	.i_adcdat(i_adc_data),		//input data from WM8731 one bit per cycle
+	.o_data(o_sram_data),		//input data from SRAM one bit per cycle
+	.o_dacdat(o_dac_data)
+);*/
+
+reg [1:0] LCD_state_r, LCD_state_w;
+
+always_comb begin
+	if ((state_r == PLAY) || (state_r == PLAY_s)) LCD_state_w = 2;
+	else if  ((state_r == RECORD) || (state_r == RECORD_s)) LCD_state_w = 1;
+	else LCD_state_w = 0;
+end
+
+LCD LCD1(
+	.i_clk(i_clk12M), 
+	.i_rst(i_sw_rst),
+	.i_state(state_r),
+	.i_speed(speed_r),
+    .o_LCD_DATA(LCD_DATA),
+	.o_LCD_EN(LCD_EN),
+	.o_LCD_ON(LCD_ON),
+	.o_LCD_RS(LCD_RS),
+	.o_LCD_RW(LCD_RW)
+	);
+
+
+logic sram_write_finished;
+logic [4:0] sram_ctrl, sram_ctrl_write, sram_ctrl_read;
+logic [19:0] o_sram_addr_write,o_sram_addr_read;
+
+assign SRAM_CE_N = sram_ctrl[4];
+assign SRAM_LB_N = sram_ctrl[3];
+assign SRAM_OE_N = sram_ctrl[2];
+assign SRAM_UB_N = sram_ctrl[1];
+assign SRAM_WE_N = sram_ctrl[0];
+always_comb begin
+	if(state_r==PLAY||state_r==PLAY_s) begin
+		sram_ctrl=sram_ctrl_read;
+		SRAM_ADDR=o_sram_addr_read;
+	end
+	else if(state_r==RECORD||state_r==RECORD_s) begin 
+		sram_ctrl=sram_ctrl_write;
+		SRAM_ADDR=o_sram_addr_write;
+	end
+	else begin
+		sram_ctrl=5'b10000;
+		SRAM_ADDR=0;
+	end
+end
+//not select: lzzzz
+//read      : 00001
+//write     : 00z00
+assign debug_sram_writeaddr = o_sram_addr_write;
+
+SramWrite SramWrite1(
+	.i_clk(i_clk12M), 		//BCLK 12M
+	.i_rst_n(i_sw_rst),
+	.i_state(state_r),
+	.i_data(i_sram_data),
+	.i_datavalid(i_sram_write_enable),
+	.o_sram_addr(o_sram_addr_write),
+	.io_sram_data(SRAM_DQ),
+	.o_sram_ctrl(sram_ctrl_write),
+	.o_sram_addr_finished(sram_write_finished), //addr is full
+	.record_end_addr(record_end_addr_w)
+);
+
+
+SramRead SramRead1(
+	.i_clk(i_clk12M),
+	.i_rst_n(i_sw_rst),
+	.i_state(state_r),
+	.i_speed(speed_r),
+	.i_read_enable(i_sram_read_require),    //from I2S
+	.i_mode(i_sw_intp),//zero=0 interpolation=1
+	.record_end_addr(record_end_addr_r),
+	.SRAM_ADDR(o_sram_addr_read), // SRAM Address
+	.SRAM_DQ(SRAM_DQ), // SRAM Data port
+	.o_sram_ctrl(sram_ctrl_read),
+	.o_read_data(o_sram_data),// after speed calculating
+	.readdata_done(sram_readdata_valid),  //tell I2S to output audio signal to WM8731
+	.read_finished(sram_read_finished)
+);
+
+/*  speed definition
+	0:-8
+	1:-7
+	2:-6
+	3:-5
+	4:-4
+	5:-3
+	6:-2
+	7:normal
+	8:2
+	9:3
+	10:4
+	11:5
+	12:6
+	13:7
+	14:8
+*/
+
+
+task SpeedCtrl;
+	input i_key2; //faster
+	input i_key3; //slower
+	begin
+		speed_w=speed_r;
+		if(i_key2) begin
+			if(speed_r!=14)
+				speed_w=speed_r+1;
+			else
+				speed_w=speed_r;
+		end	
+		else if(i_key3) begin
+			if(speed_r!=0)
+				speed_w=speed_r-1;
+			else
+				speed_w=speed_r;
+		end
+	end
+endtask
+
+
+//======================================================//
+//-------------------------FSM--------------------------//
+//======================================================//
+always_comb begin
+	state_w = state_r;
+	speed_w = 7;
+	case(state_r)
+		IDLE:begin
+			if(i_key0) begin
+				if(!i_sw_rec)
+					state_w= RECORD;
+				else
+					state_w= PLAY;
+			end
+		end
+		PLAY:begin
+			if(i_key1)
+				state_w=IDLE;
+			if(i_key0)
+				state_w=PLAY_s;
+			if(sram_read_finished)
+				state_w=IDLE;
+			SpeedCtrl(i_key2,i_key3);
+		end
+		PLAY_s:begin
+			if(i_key1)
+				state_w=IDLE;
+			if(i_key0)
+				state_w=PLAY;			
+			SpeedCtrl(i_key2,i_key3);
+		end
+		RECORD:begin
+			if(i_key1)
+				state_w=IDLE;
+			if(i_key0)
+				state_w=RECORD_s;
+			if(sram_write_finished)
+				state_w=IDLE;
+		end
+		RECORD_s:begin
+			if(i_key1)
+				state_w=IDLE;
+			if(i_key0)
+				state_w=RECORD;
+		end
+	endcase
+end
+
+
+always_ff@(posedge i_clk12M) begin 
+	if(!i_sw_rst)begin
+		state_r<=IDLE;
+		LCD_state_r <= IDLE;
+		speed_r<=7;
+		record_end_addr_r<=0;
+	end
+	else begin
+		state_r<=state_w;
+		LCD_state_r <= LCD_state_w;
+		speed_r<=speed_w;
+		record_end_addr_r<=record_end_addr_w;
+	end
+end
+
+endmodule
